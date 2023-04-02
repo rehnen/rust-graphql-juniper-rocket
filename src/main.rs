@@ -1,24 +1,53 @@
-use juniper::{EmptyMutation, EmptySubscription, RootNode};
-use rocket::serde::{json::Json, Deserialize, Serialize};
+use derive_new::new;
+use juniper::{
+    graphql_object, EmptyMutation, EmptySubscription, FieldResult, GraphQLInputObject,
+    GraphQLObject, RootNode,
+};
 use rocket::{response::content, State};
-
-use juniper::tests::fixtures::starwars::schema::{Database, Query};
-
-type Schema = RootNode<'static, Query, EmptyMutation<Database>, EmptySubscription<Database>>;
 
 #[macro_use]
 extern crate rocket;
 
-#[derive(Serialize, Deserialize)]
-#[serde(crate = "rocket::serde")]
+#[derive(GraphQLObject)]
+#[graphql(description = "This is my first attempt at graphql in rust")]
 struct Person {
+    id: String,
     name: String,
     age: i32,
 }
 
+#[derive(GraphQLInputObject)]
+#[graphql(description = "This is my first attempt at graphql in rust")]
+struct InputPerson {
+    name: String,
+    age: i32,
+}
+
+#[derive(new)]
+struct Context {}
+impl juniper::Context for Context {}
+
+struct Query;
+#[graphql_object(context = Context)]
+impl Query {
+    fn apiVersion() -> &'static str {
+        "0.1"
+    }
+    fn person(context: &Context, id: String) -> FieldResult<Person> {
+        let num: i32 = id.parse()?;
+        Ok(Person {
+            id,
+            name: String::from("Marcus"),
+            age: 31,
+        })
+    }
+}
+
+type Schema = RootNode<'static, Query, EmptyMutation<Context>, EmptySubscription<Context>>;
+
 #[rocket::get("/graphql?<request>")]
 fn get_graphql_handler(
-    context: &State<Database>,
+    context: &State<Context>,
     request: juniper_rocket::GraphQLRequest,
     schema: &State<Schema>,
 ) -> juniper_rocket::GraphQLResponse {
@@ -27,7 +56,7 @@ fn get_graphql_handler(
 
 #[rocket::post("/graphql", data = "<request>")]
 fn post_graphql_handler(
-    context: &State<Database>,
+    context: &State<Context>,
     request: juniper_rocket::GraphQLRequest,
     schema: &State<Schema>,
 ) -> juniper_rocket::GraphQLResponse {
@@ -39,28 +68,18 @@ fn graphiql() -> content::RawHtml<String> {
     juniper_rocket::graphiql_source("/graphql", None)
 }
 
-#[get("/person/<id>")]
-fn person(id: i32) -> Option<Json<Person>> {
-    if id == 2 {
-        return None;
-    }
-    Some(Json(Person {
-        name: String::from("marcus"),
-        age: 31,
-    }))
-}
-
 #[launch]
+
 async fn rocket() -> _ {
     rocket::build()
-        .manage(Database::new())
+        .manage(Context::new())
         .manage(Schema::new(
             Query,
-            EmptyMutation::<Database>::new(),
-            EmptySubscription::<Database>::new(),
+            EmptyMutation::<Context>::new(),
+            EmptySubscription::<Context>::new(),
         ))
         .mount(
             "/",
-            routes![graphiql, person, get_graphql_handler, post_graphql_handler],
+            routes![graphiql, get_graphql_handler, post_graphql_handler],
         )
 }
