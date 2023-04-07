@@ -1,9 +1,16 @@
+use std::{convert::Infallible, fmt::Display};
+
 use derive_new::new;
 use juniper::{
     graphql_object, EmptyMutation, EmptySubscription, FieldResult, GraphQLInputObject,
     GraphQLObject, RootNode,
 };
-use rocket::{response::content, State};
+use rocket::{
+    http::Status,
+    request::{FromRequest, Outcome, Request},
+    response::content,
+    State,
+};
 
 #[macro_use]
 extern crate rocket;
@@ -24,7 +31,9 @@ struct InputPerson {
 }
 
 #[derive(new)]
-struct Context {}
+struct Context {
+    token: Option<Token>,
+}
 impl juniper::Context for Context {}
 
 struct Query;
@@ -34,7 +43,11 @@ impl Query {
         "0.1"
     }
     fn person(context: &Context, id: String) -> FieldResult<Person> {
-        let num: i32 = id.parse()?;
+        let num: i32 = id.parse()?; // This is just here to illustrate the error case
+        let token = &context.token;
+        if let Some(t) = token {
+            println!("token {}", t);
+        }
         Ok(Person {
             id,
             name: String::from("Marcus"),
@@ -54,13 +67,45 @@ fn get_graphql_handler(
     request.execute_sync(&*schema, &*context)
 }
 
+struct Token(String);
+impl Display for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug)]
+enum TokenError {
+    Missing,
+}
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for Token {
+    type Error = TokenError;
+
+    async fn from_request(request: &'r Request<'_>) -> Outcome<Self, Self::Error> {
+        let token = request.headers().get_one("token");
+
+        match token {
+            Some(token) => {
+                println!("{}", token);
+                // check validity
+                Outcome::Success(Token(token.to_string()))
+            }
+            // token does not exist
+            None => Outcome::Failure((Status::Unauthorized, TokenError::Missing)),
+        }
+    }
+}
+
 #[rocket::post("/graphql", data = "<request>")]
 fn post_graphql_handler(
     context: &State<Context>,
     request: juniper_rocket::GraphQLRequest,
     schema: &State<Schema>,
+    token: Token,
 ) -> juniper_rocket::GraphQLResponse {
-    request.execute_sync(&*schema, &*context)
+    let c = Context::new(Some(token));
+    request.execute_sync(&*schema, &c)
 }
 
 #[rocket::get("/")]
@@ -69,10 +114,9 @@ fn graphiql() -> content::RawHtml<String> {
 }
 
 #[launch]
-
 async fn rocket() -> _ {
     rocket::build()
-        .manage(Context::new())
+        .manage(Context::new(None))
         .manage(Schema::new(
             Query,
             EmptyMutation::<Context>::new(),
